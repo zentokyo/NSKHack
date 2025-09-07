@@ -1,117 +1,141 @@
-import sys
+from langchain_chroma import Chroma
+from langchain_core.prompts import PromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_ollama import OllamaLLM
+from langchain_ollama import OllamaEmbeddings
+from langchain_core.documents import Document
 import os
-from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent))
-
-from core.search import HybridSearchAgent
-from utils.file_processor import FileProcessor
-from core.embedding import EmbeddingModel
-from core.database import VectorDatabase
-import argparse
-import time
+CHROMA_PATH = "./db_metadata_v5"
 
 
-def initialize_database():
-    print("Инициализация базы данных...")
+def initialize_rag():
+    print("Инициализация RAG-ассистента с моделью qwen3:4b...")
 
-    processor = FileProcessor()
-    embedding_model = EmbeddingModel()
-    vector_db = VectorDatabase(embedding_model)  # ✅ передаём модель
-
-    print("Обработка Markdown файлов...")
-    chunks, metadatas = processor.process_markdown_files("data/knowledge_base")
-
-    if not chunks:
-        print("Не найдено .md файлов для обработки")
-        return
-
-    print(f"Найдено {len(chunks)} чанков для обработки")
-
-    print("Получение эмбеддингов...")
-    batch_size = 3
-
-    all_embeddings = []
-    valid_chunks = []
-    valid_metadatas = []
-
-    for i in range(0, len(chunks), batch_size):
-        batch_chunks = chunks[i:i + batch_size]
-        print(f"Обработка батча {i // batch_size + 1}/{(len(chunks) - 1) // batch_size + 1}")
-
-        batch_embeddings = embedding_model.get_embeddings_batch(batch_chunks)
-
-        for j, (chunk, embedding, metadata) in enumerate(
-                zip(batch_chunks, batch_embeddings, metadatas[i:i + batch_size])):
-            if embedding is not None and len(embedding) == 768:  # Проверяем размерность
-                all_embeddings.append(embedding)
-                valid_chunks.append(chunk)
-                valid_metadatas.append(metadata)
-                print(f"Чанк {i + j} - размерность {len(embedding)}")
-            else:
-                print(f"Чанк {i + j} - пропущен (None или неправильная размерность)")
-
-        time.sleep(0.5)
-
-    print(f"Успешно обработано {len(valid_chunks)} из {len(chunks)} чанков")
-
-    if not valid_chunks:
-        print("Нет валидных данных для добавления в базу")
-        return
-
-    print("Добавление документов в базу...")
-
-    ids = [f"chunk_{i}" for i in range(len(valid_chunks))]
-
-    vector_db.add_documents(
-        documents=valid_chunks,
-        metadatas=valid_metadatas,
-        ids=ids,
-        embeddings=all_embeddings
+    # Используем Qwen3:4B через Ollama
+    model = OllamaLLM(
+        model="qwen3:4b",
+        temperature=0.2,
+        num_ctx=4096,
+        num_predict=512
     )
 
-    print("База данных успешно инициализирована!")
+    # Эмбеддинги
+    embedding_function = OllamaEmbeddings(model="nomic-embed-text")
+
+    # Загрузка базы Chroma
+    db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
+
+    # Промпт (важно: {context} всегда должен быть в prompt_template)
+    prompt_template = PromptTemplate.from_template("""
+SYSTEM:
+{system_prompt}
+
+КОНТЕКСТ (используй только для справки, не цитируй дословно технические метки):
+{context}
+
+USER:
+{question}
+
+ASSISTANT:
+""")
+
+    document_chain = create_stuff_documents_chain(llm=model, prompt=prompt_template)
+
+    return db, document_chain
 
 
-def interactive_mode():
-    agent = HybridSearchAgent()
-    print("=" * 60)
-    print("Гибридный поисковый агент с llama3.2 запущен")
-    print("Введите ваш вопрос (или 'quit' для выхода)")
-    print("=" * 60)
+def format_context(documents):
+    """Форматирует контекст из документов для подстановки в промпт"""
+    if not documents:
+        return ""
+    context_parts = []
+    for i, doc in enumerate(documents):
+        source = doc.metadata.get("source", "неизвестный источник")
+        section = doc.metadata.get("law_section", doc.metadata.get("article", ""))
+        part = f"[Источник {i+1}: {source} | {section}]\n{doc.page_content.strip()}"
+        context_parts.append(part)
+    return "\n\n---\n\n".join(context_parts)
 
-    while True:
-        try:
-            query = input("\n🧠 Вопрос: ").strip()
-            if query.lower() in ['quit', 'exit', 'q']:
+
+def build_system_prompt(context_str: str) -> str:
+    """Строит system_prompt для Qwen3:4b (без рассуждений, только готовый ответ)"""
+    base = """
+Ты — AI-ассистент площадки "РасЭлТорг".
+Ты работаешь с госзакупками по 223-ФЗ.
+Твоя задача — помогать пользователю разбираться в законе и в работе системы.
+
+Форматы вопросов:
+1. Термин — дай чёткое определение простыми словами.
+2. Проблема — предложи решение с опорой на нормы 223-ФЗ.
+3. Работа пользователя — объясни, как действовать в системе или процессе.
+
+Правила:
+- Давай сразу готовый ответ, не показывай ход рассуждений.
+- Пиши коротко, ясно и структурированно.
+- Используй только проверенные сведения из контекста или закона.
+- Если информации недостаточно — скажи об этом прямо и предложи, где уточнить.
+"""
+    if context_str:
+        return base + f"\nКОНТЕКСТ:\n{context_str}\n"
+    else:
+        return base
+
+def main():
+    try:
+        db, document_chain = initialize_rag()
+
+        # Проверка загрузки документов
+        docs = db.get()
+        num_docs = len(docs['documents']) if 'documents' in docs else 0
+        print("Инициализация прошла успешно!")
+        print(f"Загружено документов из Chroma: {num_docs}")
+        print("=" * 50)
+        print("-" * 50)
+
+        chat_history = []
+
+        while True:
+            user_input = input("Вы: ").strip()
+            if user_input.lower() in ['exit', 'выход']:
+                print("До свидания!")
                 break
-
-            if not query:
+            if not user_input:
                 continue
 
-            print("Обработка запроса...")
-            response = agent.process_query(query)
-            print(f"\nОтвет: {response}")
+            # Поиск релевантных чанков
+            results = db.similarity_search(user_input, k=3)
+            documents = [
+                Document(page_content=doc.page_content, metadata=doc.metadata)
+                for doc in results
+            ]
 
-        except KeyboardInterrupt:
-            print("\nВыход...")
-            break
-        except Exception as e:
-            print(f"Ошибка: {e}")
+            # Форматируем контекст
+            context_str = format_context(documents)
+
+            # Строим system_prompt
+            system_prompt = build_system_prompt(context_str)
+
+            # Входные данные для цепочки
+            inputs = {
+                "question": user_input,
+                "system_prompt": system_prompt,
+                "context": documents  # Обязательно для create_stuff_documents_chain
+            }
+
+            try:
+                answer = document_chain.invoke(inputs)
+                chat_history.append({"role": "human", "content": user_input})
+                chat_history.append({"role": "assistant", "content": answer})
+
+                print("\nАссистент:\n" + answer)
+                print("-" * 50)
+            except Exception as e:
+                print(f"\nОшибка при обработке запроса: {str(e)}")
+                print("-" * 50)
+    except Exception as e:
+        print(f"Ошибка при инициализации: {str(e)}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AI Agent с гибридным поиском и llama3.2")
-    parser.add_argument("--init", action="store_true", help="Инициализировать базу данных")
-    parser.add_argument("--chat", action="store_true", help="Запустить интерактивный режим")
-
-    args = parser.parse_args()
-
-    if args.init:
-        initialize_database()
-    elif args.chat:
-        interactive_mode()
-    else:
-        print("Используйте:")
-        print("  --init   для инициализации базы")
-        print("  --chat   для интерактивного режима")
+    main()

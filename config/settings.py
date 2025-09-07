@@ -13,7 +13,7 @@ CHROMA_COLLECTION_NAME = "knowledge_base"
 # Настройки моделей
 EMBEDDING_MODEL = "nomic-embed-text"
 EMBEDDING_DIMENSION = 768  # Размерность для nomic-embed-text
-LLM_MODEL = "llama3.2"
+LLM_MODEL = "deepseek-r1:1.5b"
 
 # Настройки Ollama
 OLLAMA_BASE_URL = "http://localhost:11434"
