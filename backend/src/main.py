@@ -2,7 +2,6 @@ from dishka.integrations.fastapi import setup_dishka
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.messages.handlers import router as messages_router
 from src.api.chat.handlers import router as chat_router
 from src.ioc import container
 
@@ -23,7 +22,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(router=messages_router)
     app.include_router(router=chat_router)
 
     setup_dishka(container, app)
