@@ -1,8 +1,8 @@
 <template>
   <div class="flex flex-col gap-4">
     <div
-      v-for="message in messagesStore.messages"
-      :key="message.id"
+      v-for="message in messagesStore.thisChat.messages"
+      :key="message.message_id"
       :class="[
         'flex',
         message.sender === 'user' ? 'justify-end' : 'justify-start',
