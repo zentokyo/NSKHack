@@ -9,5 +9,5 @@ class Message:
     chat_id: uuid.UUID
     text: str
     sender: str
-    rating: int | None = field(default=None, kw_only=True)
+    rating: int = field(default=0, kw_only=True)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC), kw_only=True)

@@ -26,3 +26,12 @@ class ChatResponse(ChatShortResponse):
             title=chat.title,
             messages=[MessageResponse.from_entity(message) for message in chat.messages]
         )
+
+
+class CreateMessageSchema(BaseModel):
+    text: str
+    sender: str
+
+
+class UpdateMessageSchema(BaseModel):
+    rating: int
