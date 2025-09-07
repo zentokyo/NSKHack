@@ -5,19 +5,67 @@ from langchain_ollama import OllamaLLM
 from langchain_ollama import OllamaEmbeddings
 from langchain_core.documents import Document
 import os
+import re
 
 CHROMA_PATH = "./db_metadata_v5"
+
+
+def clean_answer(text: str) -> str:
+    """Удаляет скрытые рассуждения модели: теги <think>, <reasoning>, и фразы вроде 'Давайте подумаем'"""
+    # Удаляем теги типа <think>...</think>
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Удаляем строки, начинающиеся с типичных фраз рассуждений
+    lines = text.splitlines()
+    filtered_lines = []
+    skip_phrases = [
+        "Давайте подумаем",
+        "Рассмотрим",
+        "Шаг 1",
+        "Шаг 2",
+        "Во-первых",
+        "Во-вторых",
+        "Итак,",
+        "Таким образом,",
+        "Хорошо,",
+        "Понял,",
+        "Я вижу,",
+        "Проанализируем",
+        "Обратим внимание",
+        "Как видно из контекста",
+        "На основе контекста",
+        "Из предоставленного контекста",
+        "Сначала",
+        "Затем",
+        "Наконец",
+    ]
+
+    for line in lines:
+        if any(line.strip().startswith(phrase) for phrase in skip_phrases):
+            continue  # Пропускаем строки с рассуждениями
+        filtered_lines.append(line)
+
+    # Собираем обратно и чистим пробелы
+    text = "\n".join(filtered_lines).strip()
+
+    # Дополнительно: удаляем пустые блоки в начале/конце
+    text = re.sub(r"^\s*\n+", "", text)
+    text = re.sub(r"\n+\s*$", "", text)
+
+    return text
 
 
 def initialize_rag():
     print("Инициализация RAG-ассистента с моделью qwen3:4b...")
 
-    # Используем Qwen3:4B через Ollama
+    # Используем Qwen3:4B через Ollama — БЕЗ stop-токенов, чтобы не обрезать ответ
     model = OllamaLLM(
         model="qwen3:4b",
         temperature=0.2,
         num_ctx=4096,
-        num_predict=512
+        num_predict=2048
+        # stop убран — чтобы не обрывать генерацию
     )
 
     # Эмбеддинги
@@ -26,7 +74,7 @@ def initialize_rag():
     # Загрузка базы Chroma
     db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
 
-    # Промпт (важно: {context} всегда должен быть в prompt_template)
+    # Промпт
     prompt_template = PromptTemplate.from_template("""
 SYSTEM:
 {system_prompt}
@@ -53,17 +101,16 @@ def format_context(documents):
     for i, doc in enumerate(documents):
         source = doc.metadata.get("source", "неизвестный источник")
         section = doc.metadata.get("law_section", doc.metadata.get("article", ""))
-        part = f"[Источник {i+1}: {source} | {section}]\n{doc.page_content.strip()}"
+        part = f"[Источник {i + 1}: {source} | {section}]\n{doc.page_content.strip()}"
         context_parts.append(part)
     return "\n\n---\n\n".join(context_parts)
 
 
 def build_system_prompt(context_str: str) -> str:
-    """Строит system_prompt для Qwen3:4b (без рассуждений, только готовый ответ)"""
+    """Строит system_prompt для Qwen3:4b — только готовый ответ, без рассуждений"""
     base = """
-Ты — AI-ассистент площадки "РасЭлТорг".
-Ты работаешь с госзакупками по 223-ФЗ.
-Твоя задача — помогать пользователю разбираться в законе и в работе системы.
+Ты — AI-консультант площадки "РасЭлТорг", специализирующийся на госзакупках по 223-ФЗ.
+Твоя задача — помогать пользователям разбираться в законе и работе системы.
 
 Форматы вопросов:
 1. Термин — дай чёткое определение простыми словами.
@@ -71,15 +118,18 @@ def build_system_prompt(context_str: str) -> str:
 3. Работа пользователя — объясни, как действовать в системе или процессе.
 
 Правила:
-- Давай сразу готовый ответ, не показывай ход рассуждений.
-- Пиши коротко, ясно и структурированно.
+- Никогда не показывай ход рассуждений. Не пиши фразы вроде "Давайте подумаем", "Шаг 1", "Как видно из контекста".
+- Не используй теги  <think>, <reasoning> и им подобные — даже если хочется.
+- Давай сразу готовый, структурированный и ясный ответ — как будто ты уже всё обдумал.
 - Используй только проверенные сведения из контекста или закона.
 - Если информации недостаточно — скажи об этом прямо и предложи, где уточнить.
+- Ты консультант — отвечай доступно, но точно. Не добавляй лишнего.
 """
     if context_str:
         return base + f"\nКОНТЕКСТ:\n{context_str}\n"
     else:
         return base
+
 
 def main():
     try:
@@ -120,11 +170,16 @@ def main():
             inputs = {
                 "question": user_input,
                 "system_prompt": system_prompt,
-                "context": documents  # Обязательно для create_stuff_documents_chain
+                "context": documents
             }
 
             try:
                 answer = document_chain.invoke(inputs)
+                answer = clean_answer(answer)  # ← Здесь вырезаем всё лишнее
+
+                if not answer.strip():
+                    answer = "Извините, я не смог сформулировать ответ. Попробуйте переформулировать вопрос."
+
                 chat_history.append({"role": "human", "content": user_input})
                 chat_history.append({"role": "assistant", "content": answer})
 

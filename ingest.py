@@ -36,7 +36,7 @@ def load_documents():
 
 
 def normalize_text(text):
-    """Удаление лишних пробелов и символов"""
+    """Удаление лишних пробелов и символов для хэширования"""
     text = re.sub(r'\s+', ' ', text)
     return re.sub(r'[^\w]', '', text.lower())
 
@@ -48,7 +48,7 @@ def hash_text(text):
 
 
 def clean_legal_text(text):
-    """Очистка юридического текста от ненужной информации"""
+    """Очистка текста от лишней информации и служебных данных"""
     text = re.sub(r'См\..*?(\n|$)', '', text, flags=re.DOTALL)
     text = re.sub(r'Информация об изменениях:.*?(\n|$)', '', text, flags=re.DOTALL)
     text = re.sub(r'в редакции.*?(\n|$)', '', text, flags=re.DOTALL)
@@ -59,34 +59,61 @@ def clean_legal_text(text):
     return text.strip()
 
 
-def split_text(documents: list[Document]):
-    """Разделение текста на чанки с учетом юридической структуры"""
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        separators=[
+def detect_doc_type(text):
+    """Определяет структуру документа по заголовкам и нумерации"""
+    if re.search(r'^## ', text, re.MULTILINE):
+        return 'faq'
+    elif re.search(r'^\d+\.\d+\.\d+', text, re.MULTILINE):
+        return 'reglam'
+    elif re.search(r'(Глава|Статья|Пункт)\s+\d+', text):
+        return 'law'
+    else:
+        return 'generic'
+
+
+def get_text_splitter(doc_type):
+    """Возвращает настроенный сплиттер в зависимости от типа документа"""
+    if doc_type == 'faq':
+        separators = [r'\n## ', r'\n\n', '\n', ' ']
+        chunk_size = 800
+        chunk_overlap = 100
+    elif doc_type == 'reglam':
+        separators = [r'\n### ', r'\n\d+\.\d+\.\d+', r'\n\n', '\n', ' ']
+        chunk_size = 1000
+        chunk_overlap = 200
+    elif doc_type == 'law':
+        separators = [
             r'\n\n(?:Статья|Глава|Пункт)\s+\d+[.,)]',
             r'\n\n(?:Статья|Глава|Пункт)\s+[IVXLCDM]+',
-            r'\n\n(?:Статья|Глава|Пункт)\s+\d+',
             r'\n\n',
             r'\n',
             ' '
         ]
+        chunk_size = 1000
+        chunk_overlap = 200
+    else:
+        separators = ['\n\n', '\n', ' ']
+        chunk_size = 800
+        chunk_overlap = 100
+
+    return RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=separators
     )
 
+
+def split_text(documents: list[Document]):
+    """Разделение текста на чанки с учетом типа документа"""
     chunks = []
+
     for doc in documents:
         try:
             cleaned_text = clean_legal_text(doc.page_content)
+            doc_type = detect_doc_type(cleaned_text)
+            text_splitter = get_text_splitter(doc_type)
 
-            cleaned_text = re.sub(r'(?:Статья|Глава|Пункт)\s+[\dIVXLCDM]+',
-                                  r'\n\n\g<0>', cleaned_text)
-
-            new_doc = Document(
-                page_content=cleaned_text,
-                metadata=doc.metadata.copy()
-            )
-
+            new_doc = Document(page_content=cleaned_text, metadata=doc.metadata.copy())
             doc_chunks = text_splitter.split_documents([new_doc])
 
             current_chapter = None
@@ -96,25 +123,39 @@ def split_text(documents: list[Document]):
                 if not chunk.page_content.strip():
                     continue
 
-                section_match = re.search(r'(Глава|Статья|Пункт)\s+([\dIVXLCDM]+)', chunk.page_content)
-                if section_match:
-                    section_type = section_match.group(1)
-                    section_num = section_match.group(2)
-                    section_full = f"{section_type} {section_num}"
+                # Заполняем метаданные
+                if doc_type == 'law':
+                    section_match = re.search(r'(Глава|Статья|Пункт)\s+([\dIVXLCDM]+)', chunk.page_content)
+                    if section_match:
+                        section_type = section_match.group(1)
+                        section_num = section_match.group(2)
+                        section_full = f"{section_type} {section_num}"
 
-                    if section_type == "Глава":
-                        current_chapter = section_full
-                    elif section_type == "Статья":
-                        current_article = section_full
+                        if section_type == "Глава":
+                            current_chapter = section_full
+                        elif section_type == "Статья":
+                            current_article = section_full
 
-                    chunk.metadata["law_section"] = section_full
-                    chunk.metadata["section_type"] = section_type
-                    chunk.metadata["section_number"] = section_num
+                        chunk.metadata.update({
+                            "law_section": section_full,
+                            "section_type": section_type,
+                            "section_number": section_num
+                        })
 
-                if current_chapter:
-                    chunk.metadata["chapter"] = current_chapter
-                if current_article:
-                    chunk.metadata["article"] = current_article
+                    if current_chapter:
+                        chunk.metadata["chapter"] = current_chapter
+                    if current_article:
+                        chunk.metadata["article"] = current_article
+
+                elif doc_type == 'reglam':
+                    header_match = re.search(r'(\d+\.\d+\.\d+)\s', chunk.page_content)
+                    if header_match:
+                        chunk.metadata["reglam_section"] = header_match.group(1)
+
+                elif doc_type == 'faq':
+                    header_match = re.search(r'## (.+)', chunk.page_content)
+                    if header_match:
+                        chunk.metadata["faq_title"] = header_match.group(1)
 
                 chunks.append(chunk)
 
@@ -123,6 +164,7 @@ def split_text(documents: list[Document]):
 
     print(f"[INFO] Разделено {len(documents)} документов на {len(chunks)} чанков.")
 
+    # Дедупликация
     unique_chunks = []
     for chunk in chunks:
         chunk_hash = hash_text(chunk.page_content)
@@ -132,14 +174,17 @@ def split_text(documents: list[Document]):
 
     print(f"[INFO] Уникальных чанков после дедупликации: {len(unique_chunks)}")
 
+    # Примеры чанков
     print("\n=== Примеры загруженных чанков ===")
-    for i, chunk in enumerate(unique_chunks):
+    for i, chunk in enumerate(unique_chunks[:5]):
         print(f"\n--- Чанк #{i + 1} ---")
         print(f"Источник: {chunk.metadata.get('source', 'N/A')}")
         print(f"Тип раздела: {chunk.metadata.get('section_type', 'N/A')}")
         print(f"Номер: {chunk.metadata.get('section_number', 'N/A')}")
         print(f"Глава: {chunk.metadata.get('chapter', 'N/A')}")
         print(f"Статья: {chunk.metadata.get('article', 'N/A')}")
+        print(f"FAQ заголовок: {chunk.metadata.get('faq_title', 'N/A')}")
+        print(f"Регламент секция: {chunk.metadata.get('reglam_section', 'N/A')}")
         print(f"Длина: {len(chunk.page_content)}")
         print(f"Содержание:\n{chunk.page_content[:500]}...")
 
