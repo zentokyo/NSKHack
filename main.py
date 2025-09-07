@@ -194,3 +194,64 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ============ ГЛОБАЛЬНЫЕ КОМПОНЕНТЫ RAG ============
+_db = None
+_document_chain = None
+
+
+def get_rag_components():
+    """Инициализирует и возвращает компоненты RAG один раз (кэширование)"""
+    global _db, _document_chain
+    if _db is None or _document_chain is None:
+        print("🔄 Инициализация RAG компонентов...")
+        _db, _document_chain = initialize_rag()
+        print("✅ RAG готов к работе.")
+    return _db, _document_chain
+
+
+def ask_question(question: str) -> str:
+    """
+    Принимает вопрос пользователя → возвращает готовый ответ от RAG-ассистента.
+    Используется для интеграции с бэкендом (FastAPI, Flask и т.д.).
+    """
+    if not question or not question.strip():
+        return "Пожалуйста, задайте конкретный вопрос."
+
+    try:
+        # Получаем уже инициализированные компоненты
+        db, document_chain = get_rag_components()
+
+        # Поиск релевантных документов
+        results = db.similarity_search(question, k=3)
+        documents = [
+            Document(page_content=doc.page_content, metadata=doc.metadata)
+            for doc in results
+        ]
+
+        # Форматируем контекст
+        context_str = format_context(documents)
+
+        # Строим system_prompt
+        system_prompt = build_system_prompt(context_str)
+
+        # Подготавливаем входные данные
+        inputs = {
+            "question": question,
+            "system_prompt": system_prompt,
+            "context": documents
+        }
+
+        # Генерация ответа
+        answer = document_chain.invoke(inputs)
+        answer = clean_answer(answer)  # Убираем рассуждения
+
+        # Проверка на пустой ответ
+        if not answer.strip():
+            answer = "Извините, я не смог сформулировать ответ. Попробуйте переформулировать вопрос."
+
+    except Exception as e:
+        answer = f"⚠️ Ошибка при генерации ответа: {str(e)}"
+
+    return answer
