@@ -27,6 +27,14 @@ class ChatRepository(ABC):
     async def get_chat_list(self) -> list[Chat]:
         pass
 
+    @abstractmethod
+    async def check_chat_empty(self, chat_id: uuid.UUID) -> bool:
+        pass
+
+    @abstractmethod
+    async def update_chat(self, chat: Chat) -> None:
+        pass
+
 
 class SQLAlchemyChatRepository(ChatRepository):
     def __init__(self, session: AsyncSession):
@@ -56,3 +64,16 @@ class SQLAlchemyChatRepository(ChatRepository):
         query = select(ChatModel).order_by(ChatModel.created_at.desc())
         model_list = await self._session.scalars(query)
         return [model.to_entity_without_messages() for model in model_list.all()]
+
+    async def check_chat_empty(self, chat_id: uuid.UUID) -> bool:
+        query = select(ChatModel).where(ChatModel.chat_id == chat_id).options(selectinload(ChatModel.messages))
+        model = await self._session.scalar(query)
+
+        if not model.messages:
+            return True
+        return False
+
+    async def update_chat(self, chat: Chat) -> None:
+        model = ChatModel.from_entity(chat)
+        await self._session.merge(model)
+        await self._session.commit()
