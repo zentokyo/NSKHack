@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from src.api.schemas import AddMessageSchema
+from src.api.messages.schemas import AddMessageSchema
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 

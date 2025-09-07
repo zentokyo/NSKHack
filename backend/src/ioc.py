@@ -4,6 +4,8 @@ from dishka import Provider, from_context, Scope, provide, make_async_container
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine, async_sessionmaker, AsyncSession
 
 from src.config import Config, config
+from src.core.chat.repositories.chat import SQLAlchemyChatRepository, ChatRepository
+from src.core.chat.use_cases.chat import CreateChatUseCase, GetChatByIdUseCase, GetChatListUseCase
 
 
 class SQLAlchemyProvider(Provider):
@@ -29,7 +31,18 @@ class SQLAlchemyProvider(Provider):
             yield session
 
 
+class ChatProvider(Provider):
+    scope = Scope.REQUEST
+
+    chat_repository = provide(SQLAlchemyChatRepository, provides=ChatRepository)
+
+    create_chat_use_case = provide(CreateChatUseCase)
+    get_chat_by_id_use_case = provide(GetChatByIdUseCase)
+    get_chat_list_use_case = provide(GetChatListUseCase)
+
+
 container = make_async_container(
     SQLAlchemyProvider(),
+    ChatProvider(),
     context={Config: config, }
 )
