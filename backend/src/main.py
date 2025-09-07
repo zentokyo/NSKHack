@@ -1,12 +1,15 @@
+from dishka.integrations.fastapi import setup_dishka
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.handlers import router
+from src.ioc import container
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
 
 def create_app() -> FastAPI:
     app = FastAPI()
@@ -20,5 +23,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router=router)
+
+    setup_dishka(container, app)
 
     return app
