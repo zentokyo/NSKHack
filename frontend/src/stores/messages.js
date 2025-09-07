@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-let idMessage = 0
+// let idMessage = 0
 
 export const useMessagesStore = defineStore('messages', {
   state: () => ({
@@ -106,6 +106,7 @@ export const useMessagesStore = defineStore('messages', {
         }
         const data = await response.json();
         console.log("logdata response for send", data);
+        this.selectChat(this.thisChat.chat_id);
       }catch (error) {
         console.error('Ошибка при отправке сообщения:', error);
         this.error = error.message;
