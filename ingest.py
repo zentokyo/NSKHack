@@ -14,7 +14,6 @@ global_unique_hashes = set()
 
 
 def walk_through_files(path, file_extension='.md'):
-    """Рекурсивный обход MD-файлов"""
     for dir_path, dir_names, filenames in os.walk(path):
         for filename in filenames:
             if filename.endswith(file_extension):
@@ -22,7 +21,6 @@ def walk_through_files(path, file_extension='.md'):
 
 
 def load_documents():
-    """Загрузка MD-документов"""
     documents = []
     for file_path in walk_through_files(DATA_PATH, '.md'):
         try:
@@ -36,19 +34,16 @@ def load_documents():
 
 
 def normalize_text(text):
-    """Удаление лишних пробелов и символов для хэширования"""
     text = re.sub(r'\s+', ' ', text)
     return re.sub(r'[^\w]', '', text.lower())
 
 
 def hash_text(text):
-    """SHA-256 хэширование текста с нормализацией"""
     normalized = normalize_text(text)
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def clean_legal_text(text):
-    """Очистка текста от лишней информации и служебных данных"""
     text = re.sub(r'См\..*?(\n|$)', '', text, flags=re.DOTALL)
     text = re.sub(r'Информация об изменениях:.*?(\n|$)', '', text, flags=re.DOTALL)
     text = re.sub(r'в редакции.*?(\n|$)', '', text, flags=re.DOTALL)
@@ -60,7 +55,6 @@ def clean_legal_text(text):
 
 
 def detect_doc_type(text):
-    """Определяет структуру документа по заголовкам и нумерации"""
     if re.search(r'^## ', text, re.MULTILINE):
         return 'faq'
     elif re.search(r'^\d+\.\d+\.\d+', text, re.MULTILINE):
@@ -72,7 +66,6 @@ def detect_doc_type(text):
 
 
 def get_text_splitter(doc_type):
-    """Возвращает настроенный сплиттер в зависимости от типа документа"""
     if doc_type == 'faq':
         separators = [r'\n## ', r'\n\n', '\n', ' ']
         chunk_size = 800
@@ -104,7 +97,6 @@ def get_text_splitter(doc_type):
 
 
 def split_text(documents: list[Document]):
-    """Разделение текста на чанки с учетом типа документа"""
     chunks = []
 
     for doc in documents:
@@ -123,7 +115,6 @@ def split_text(documents: list[Document]):
                 if not chunk.page_content.strip():
                     continue
 
-                # Заполняем метаданные
                 if doc_type == 'law':
                     section_match = re.search(r'(Глава|Статья|Пункт)\s+([\dIVXLCDM]+)', chunk.page_content)
                     if section_match:
@@ -192,7 +183,6 @@ def split_text(documents: list[Document]):
 
 
 def save_to_chroma(chunks: list[Document]):
-    """Сохранение чанков в векторное хранилище"""
     if os.path.exists(CHROMA_PATH):
         shutil.rmtree(CHROMA_PATH)
 
@@ -214,7 +204,6 @@ def save_to_chroma(chunks: list[Document]):
 
 
 def generate_data_store():
-    """Основной процесс обработки данных"""
     documents = load_documents()
     if not documents:
         print("[WARN] Не найдено документов!")

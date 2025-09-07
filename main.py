@@ -11,12 +11,9 @@ CHROMA_PATH = "./db_metadata_v5"
 
 
 def clean_answer(text: str) -> str:
-    """Удаляет скрытые рассуждения модели: теги <think>, <reasoning>, и фразы вроде 'Давайте подумаем'"""
-    # Удаляем теги типа <think>...</think>
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.DOTALL | re.IGNORECASE)
 
-    # Удаляем строки, начинающиеся с типичных фраз рассуждений
     lines = text.splitlines()
     filtered_lines = []
     skip_phrases = [
@@ -43,13 +40,11 @@ def clean_answer(text: str) -> str:
 
     for line in lines:
         if any(line.strip().startswith(phrase) for phrase in skip_phrases):
-            continue  # Пропускаем строки с рассуждениями
+            continue
         filtered_lines.append(line)
 
-    # Собираем обратно и чистим пробелы
     text = "\n".join(filtered_lines).strip()
 
-    # Дополнительно: удаляем пустые блоки в начале/конце
     text = re.sub(r"^\s*\n+", "", text)
     text = re.sub(r"\n+\s*$", "", text)
 
@@ -59,13 +54,11 @@ def clean_answer(text: str) -> str:
 def initialize_rag():
     print("Инициализация RAG-ассистента с моделью qwen3:4b...")
 
-    # Используем Qwen3:4B через Ollama — БЕЗ stop-токенов, чтобы не обрезать ответ
     model = OllamaLLM(
         model="qwen3:4b",
         temperature=0.2,
         num_ctx=4096,
         num_predict=2048
-        # stop убран — чтобы не обрывать генерацию
     )
 
     # Эмбеддинги
@@ -94,7 +87,6 @@ ASSISTANT:
 
 
 def format_context(documents):
-    """Форматирует контекст из документов для подстановки в промпт"""
     if not documents:
         return ""
     context_parts = []
@@ -107,7 +99,6 @@ def format_context(documents):
 
 
 def build_system_prompt(context_str: str) -> str:
-    """Строит system_prompt для Qwen3:4b — только готовый ответ, без рассуждений"""
     base = """
 Ты — AI-консультант площадки "РасЭлТорг", специализирующийся на госзакупках по 223-ФЗ.
 Твоя задача — помогать пользователям разбираться в законе и работе системы.
@@ -135,7 +126,6 @@ def main():
     try:
         db, document_chain = initialize_rag()
 
-        # Проверка загрузки документов
         docs = db.get()
         num_docs = len(docs['documents']) if 'documents' in docs else 0
         print("Инициализация прошла успешно!")
@@ -153,20 +143,16 @@ def main():
             if not user_input:
                 continue
 
-            # Поиск релевантных чанков
             results = db.similarity_search(user_input, k=3)
             documents = [
                 Document(page_content=doc.page_content, metadata=doc.metadata)
                 for doc in results
             ]
 
-            # Форматируем контекст
             context_str = format_context(documents)
 
-            # Строим system_prompt
             system_prompt = build_system_prompt(context_str)
 
-            # Входные данные для цепочки
             inputs = {
                 "question": user_input,
                 "system_prompt": system_prompt,
@@ -175,7 +161,7 @@ def main():
 
             try:
                 answer = document_chain.invoke(inputs)
-                answer = clean_answer(answer)  # ← Здесь вырезаем всё лишнее
+                answer = clean_answer(answer)
 
                 if not answer.strip():
                     answer = "Извините, я не смог сформулировать ответ. Попробуйте переформулировать вопрос."
@@ -202,56 +188,47 @@ _document_chain = None
 
 
 def get_rag_components():
-    """Инициализирует и возвращает компоненты RAG один раз (кэширование)"""
     global _db, _document_chain
     if _db is None or _document_chain is None:
-        print("🔄 Инициализация RAG компонентов...")
+        print("Инициализация RAG компонентов...")
         _db, _document_chain = initialize_rag()
-        print("✅ RAG готов к работе.")
+        print("RAG готов к работе.")
     return _db, _document_chain
 
 
 def ask_question(question: str) -> str:
     """
     Принимает вопрос пользователя → возвращает готовый ответ от RAG-ассистента.
-    Используется для интеграции с бэкендом (FastAPI, Flask и т.д.).
     """
     if not question or not question.strip():
         return "Пожалуйста, задайте конкретный вопрос."
 
     try:
-        # Получаем уже инициализированные компоненты
         db, document_chain = get_rag_components()
 
-        # Поиск релевантных документов
         results = db.similarity_search(question, k=3)
         documents = [
             Document(page_content=doc.page_content, metadata=doc.metadata)
             for doc in results
         ]
 
-        # Форматируем контекст
         context_str = format_context(documents)
 
-        # Строим system_prompt
         system_prompt = build_system_prompt(context_str)
 
-        # Подготавливаем входные данные
         inputs = {
             "question": question,
             "system_prompt": system_prompt,
             "context": documents
         }
 
-        # Генерация ответа
         answer = document_chain.invoke(inputs)
-        answer = clean_answer(answer)  # Убираем рассуждения
+        answer = clean_answer(answer)
 
-        # Проверка на пустой ответ
         if not answer.strip():
             answer = "Извините, я не смог сформулировать ответ. Попробуйте переформулировать вопрос."
 
     except Exception as e:
-        answer = f"⚠️ Ошибка при генерации ответа: {str(e)}"
+        answer = f"Ошибка при генерации ответа: {str(e)}"
 
     return answer
