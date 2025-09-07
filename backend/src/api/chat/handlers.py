@@ -34,7 +34,7 @@ async def get_chat_list_handler(use_case: FromDishka[GetChatListUseCase]) -> lis
     return [ChatShortResponse.model_validate(chat, from_attributes=True) for chat in chat_list]
 
 
-@router.get("{chat_id}/")
+@router.get("/{chat_id}/")
 @inject
 async def get_chat_by_id(
         chat_id: uuid.UUID,
